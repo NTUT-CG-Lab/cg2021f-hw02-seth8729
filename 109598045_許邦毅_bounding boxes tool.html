@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<title>three.js webgl - loaders - MMD loader</title>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+	<link type="text/css" rel="stylesheet" href="main.css">
+	<style>
+		body {
+			background-color: #fff;
+			color: #444;
+		}
+
+		a {
+			color: #08f;
+		}
+		.three{
+			position: absolute;
+			top: 0;
+			left: 0;
+			z-index: -1;
+		}
+	</style>
+</head>
+
+<body>
+	<div id="info">
+		<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - MMDLoader test<br />
+		<a href="https://github.com/mrdoob/three.js/tree/master/examples/models/mmd#readme" target="_blank"
+			rel="noopener">MMD Assets license</a><br />
+		Copyright
+		<a href="https://sites.google.com/view/evpvp/" target="_blank" rel="noopener">Model Data</a>
+		<a href="http://seiga.nicovideo.jp/seiga/im5162984" target="_blank" rel="noopener">Pose Data</a>
+	</div>
+
+	<script src="js/libs/ammo.wasm.js"></script>
+	<script src="scoreoutputer.min.js"></script>
+	<script>
+		// 建構子 ScoreOutputer 接受一個字串，該字串為 csv 的檔案名稱
+		// 以下面範例，檔名就為 "109598105(總分: 6).csv"
+		var so = new ScoreOutputer("109598045");
+		so.installCSS(function () {
+			// 安裝 bootstrap 的 css，如果在 html 上方引用 bootstrap 5.1.1 的話就不用使用 installCSS ，注意一定要 bootstrap css 5.1.1 版
+			// installCSS 接收一個 callback 當作參數，作為成功安裝 bootstrap css 的回呼函式
+
+			//加入項目，分數，完成狀況
+			//第一個參數為 項目名稱
+			//第2個參數為 項目分數
+			//第3個參數為 完成狀況，有完成 true/未完成 false
+			//有幾個項目就呼叫幾個 addChild
+			//addChild 要比 renderModal 先呼叫
+			so.addChild("視角可以移動及放大", 2, true);
+			so.addChild("在畫面上畫出左眼的邊框", 2, true);
+			so.addChild("複製左眼邊框變化到右眼", 2, true);
+			so.addChild("可選擇當前讀取角色或按鍵選擇上 / 下一隻角色", 1, true);
+			so.addChild("可儲存座標點檔案", 1, true);
+			so.addChild("回答問題", 2, true);
+
+			//產生自評表，參數如下所示
+			so.renderModal(
+				//1. 自評表插入位置 (預設 document.body)
+				document.body,
+				//2. 自評表背景 (預設紅色)
+				'rgba(100,45,58,1)',
+				//3. 自評表文字顏色 (預設白色)
+				'white',
+				//4. 自評表文字大小 (預設 14pt)
+				'15pt',
+				//5. 自評表 checkbox 文字大小 (預設多少忘了)
+				'15px',
+				//6. 自評表標題 (預設 "自我評分表")
+				dialogTitle = "自我評分表"
+			);
+
+			//設定下載按鈕 <-- 一定要呼叫這個函數，不然沒有下載功能
+			so.installDownloadBtn();
+
+			//產生 "開啟自評表按鈕"
+			so.renderBtn(
+				//自評表按鈕插入位置
+				document.body,
+				//自評表按鈕文字
+				"開啟自評表"
+			);
+		});
+	</script>
+	<script type="module">
+
+		import * as THREE from './build/three.module.js';
+		import { GUI } from './jsm/libs/dat.gui.module.js';
+		import { OrbitControls } from './jsm/controls/OrbitControls.js';
+		import { OutlineEffect } from './jsm/effects/OutlineEffect.js';
+		import { MMDLoader } from './jsm/loaders/MMDLoader.js';
+		import { MMDAnimationHelper } from './jsm/animation/MMDAnimationHelper.js';
+
+		let camera, scene, renderer, effect;
+		let mesh, helper;
+		let vPosition = [], hPosition = [], leftLineGroup, rightLineGroup, choiceLine, line;
+		let modelList = [], index = 0;
+		const mouse = new THREE.Vector2();
+		vPosition.push( new THREE.Vector3( 0, 0, 0 ) );
+		vPosition.push( new THREE.Vector3( 0, 10, 0 ) );
+		hPosition.push( new THREE.Vector3( 0, 0, 0 ) );
+		hPosition.push( new THREE.Vector3( 10, 0, 0 ) );
+
+		const vpds = [];
+
+		Ammo().then(function (AmmoLib) {
+
+			Ammo = AmmoLib;
+
+			init();
+			animate();
+
+		});
+
+		function init() {
+
+			const container = document.createElement('div');
+			container.classList.add('three')
+			document.body.appendChild(container);
+			let scale = 30;
+			camera = new THREE.OrthographicCamera(window.innerWidth / scale / - 2, window.innerWidth / scale / 2, window.innerHeight / scale / 2, window.innerHeight / scale / - 2, 0.1, 1000);
+			//camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 1, 2000 );
+			camera.position.z = 25;
+
+			// scene
+
+			scene = new THREE.Scene();
+			scene.background = new THREE.Color(0xffffff);
+
+			const ambient = new THREE.AmbientLight(0x666666);
+			scene.add(ambient);
+
+			const directionalLight = new THREE.DirectionalLight(0x887766);
+			directionalLight.position.set(- 1, 1, 1).normalize();
+			scene.add(directionalLight);
+
+			//
+
+			renderer = new THREE.WebGLRenderer({ antialias: true });
+			renderer.setPixelRatio(window.devicePixelRatio);
+			renderer.setSize(window.innerWidth, window.innerHeight);
+			container.appendChild(renderer.domElement);
+
+			effect = new OutlineEffect(renderer);
+
+			// model
+
+			function onProgress(xhr) {
+
+				if (xhr.lengthComputable) {
+
+					const percentComplete = xhr.loaded / xhr.total * 100;
+					console.log(Math.round(percentComplete, 2) + '% downloaded');
+
+				}
+
+			}
+
+			const modelFile = ["models/mmd/kizunaai/kizunaai.pmx", "models/mmd/るいのれ式物述有栖_配布用フォルダ/物述有栖.pmx", "models/mmd/『天宮こころ(Kokoro Amamiya)』/『天宮こころ(Kokoro Amamiya)』.pmx"];
+			const vpdFiles = [
+				'models/mmd/vpds/01.vpd',
+				'models/mmd/vpds/02.vpd',
+				'models/mmd/vpds/03.vpd',
+				'models/mmd/vpds/04.vpd',
+				'models/mmd/vpds/05.vpd',
+				'models/mmd/vpds/06.vpd',
+				'models/mmd/vpds/07.vpd',
+				'models/mmd/vpds/08.vpd',
+				//'models/mmd/vpds/09.vpd',
+				//'models/mmd/vpds/10.vpd',
+				'models/mmd/vpds/11.vpd'
+			];
+
+			helper = new MMDAnimationHelper();
+
+			const loader = new MMDLoader();
+
+			loader.load(modelFile[0], function (object) {
+
+				mesh = object;
+				mesh.position.y = -10;
+				mesh.name = 'character';
+
+				scene.add(mesh);
+
+				let vpdIndex = 0;
+
+				function loadVpd() {
+
+					const vpdFile = vpdFiles[vpdIndex];
+
+					loader.loadVPD(vpdFile, false, function (vpd) {
+
+						vpds.push(vpd);
+
+						vpdIndex++;
+
+						if (vpdIndex < vpdFiles.length) {
+
+							loadVpd();
+
+						} else {
+
+							initGui();
+
+						}
+
+					}, onProgress, null);
+
+				}
+
+				loadVpd();
+
+			}, onProgress, null);
+
+			//
+
+			window.addEventListener('resize', onWindowResize);
+			//鏡頭控制
+			const cameracontrols = new OrbitControls(camera, renderer.domElement);
+			cameracontrols.minDistance = 10;
+			cameracontrols.maxDistance = 100;
+			cameracontrols.enableRotate = false;
+			function initGui() {
+
+				const gui = new GUI();
+
+				const dictionary = mesh.morphTargetDictionary;
+
+				const controls = {};
+				const keys = [];
+
+				const models = gui.addFolder('Models');
+				const poses = gui.addFolder('Poses');
+				const morphs = gui.addFolder('Morphs');
+
+				function getBaseName(s) {
+
+					return s.slice(s.lastIndexOf('/') + 1);
+
+				}
+
+				function initControls() {
+
+					for (const key in dictionary) {
+
+						controls[key] = 0.0;
+
+					}
+
+					controls.pose = -1;
+
+					for (let i = 0; i < vpdFiles.length; i++) {
+
+						controls[getBaseName(vpdFiles[i])] = false;
+
+					}
+
+					controls.model = 0;
+
+					for (let i = 0; i < modelFile.length; i++) {
+
+						controls[getBaseName(modelFile[i])] = false;
+
+					}
+
+				}
+
+				function initKeys() {
+
+					for (const key in dictionary) {
+
+						keys.push(key);
+
+					}
+
+				}
+
+				function initModels() {
+
+					const files = {};
+
+					for (let i = 0; i < modelFile.length; i++) {
+
+						files[getBaseName(modelFile[i])] = i;
+
+					}
+
+					models.add(controls, 'model', files).onChange(onChangeModel);
+
+				}
+
+				function initPoses() {
+
+					const files = { default: - 1 };
+
+					for (let i = 0; i < vpdFiles.length; i++) {
+
+						files[getBaseName(vpdFiles[i])] = i;
+
+					}
+
+					poses.add(controls, 'pose', files).onChange(onChangePose);
+
+				}
+
+				function initMorphs() {
+
+					for (const key in dictionary) {
+
+						morphs.add(controls, key, 0.0, 1.0, 0.01).onChange(onChangeMorph);
+
+					}
+
+				}
+
+				function onChangeMorph() {
+
+					for (let i = 0; i < keys.length; i++) {
+
+						const key = keys[i];
+						const value = controls[key];
+						mesh.morphTargetInfluences[i] = value;
+
+					}
+
+				}
+
+				function onChangePose() {
+
+					const index = parseInt(controls.pose);
+
+					if (index === - 1) {
+
+						mesh.pose();
+
+					} else {
+
+						helper.pose(mesh, vpds[index]);
+						console.log(index)
+
+					}
+
+				}
+
+				function onChangeModel() {
+
+					const i = parseInt(controls.model);
+					index = i;
+
+					loader.load(modelFile[i], function (object) {
+
+						mesh = object
+						object.position.y = -10;
+						scene.children[4] = mesh;
+
+					},onProgress, null);
+					leftLineGroup.clear();
+					rightLineGroup.clear();
+				}
+
+				initControls();
+				initKeys();
+				initPoses();
+				initMorphs();
+				initModels();
+
+				onChangeMorph();
+				onChangePose();
+
+				poses.open();
+				morphs.open();
+				models.open();
+
+			}
+			
+			initSavePoint();
+			leftLineGroup = new THREE.Group();
+			leftLineGroup.position.z = 10;
+			rightLineGroup = new THREE.Group();
+			rightLineGroup.position.z = 10;
+			scene.add(leftLineGroup);
+			scene.add(rightLineGroup);
+			window.addEventListener("keydown", keydown);
+			document.addEventListener( 'pointermove', onPointerMove );
+			
+
+		}
+
+		function initSavePoint(){		
+			modelList.push({ 
+				"location":"models/mmd/るいのれ式物述有栖_配布用フォルダ/物述有栖.pmx",
+				"line_locationx_1":0,
+				"line_locationy_1":0,
+				"line_locationx_2":0,
+				"line_locationy_2":0,
+				"line_locationx_3":0,
+				"line_locationy_3":0,
+				"line_locationx_4":0,
+				"line_locationy_4":0
+			});
+			modelList.push({ 
+				"location":"models/mmd/kizunaai/kizunaai.pmx",
+				"line_locationx_1":0,
+				"line_locationy_1":0,
+				"line_locationx_2":0,
+				"line_locationy_2":0,
+				"line_locationx_3":0,
+				"line_locationy_3":0,
+				"line_locationx_4":0,
+				"line_locationy_4":0
+			});
+			modelList.push({ 
+				"location":"models/mmd/『天宮こころ(Kokoro Amamiya)』/『天宮こころ(Kokoro Amamiya)』.pmx",
+				"line_locationx_1":0,
+				"line_locationy_1":0,
+				"line_locationx_2":0,
+				"line_locationy_2":0,
+				"line_locationx_3":0,
+				"line_locationy_3":0,
+				"line_locationx_4":0,
+				"line_locationy_4":0
+			});
+			console.log(modelList);
+
+		}
+
+		function onWindowResize() {
+
+			let scale = 30;
+			camera.left = window.innerWidth / scale / - 2;
+			camera.right = window.innerWidth / scale / 2;
+			camera.top = window.innerHeight / scale / 2;
+			camera.bottom = window.innerHeight / scale / - 2;
+			camera.updateProjectionMatrix();
+
+			effect.setSize(window.innerWidth, window.innerHeight);
+
+		}
+
+		//
+		function CreateLine(name, setColor, position){
+			line = leftLineGroup.getObjectByName(name)
+			if(line == undefined){
+				let material, geometry
+				material = new THREE.LineBasicMaterial( { color: setColor} );
+				geometry = new THREE.BufferGeometry().setFromPoints( position );
+				line = new THREE.Line( geometry, material );
+				line.name = name
+				leftLineGroup.add(line)
+			}
+		}
+
+		function CopyLine(name, setColor){
+			let material, geometry, line, p, position = []
+			p = leftLineGroup.getObjectByName(name)
+			if(p != undefined){
+				if(setColor == 0xff00ff){
+					position.push( new THREE.Vector3( 0, p.position.y, 0 ) );
+					position.push( new THREE.Vector3( -10, p.position.y, 0 ) );
+				}
+				else if(setColor == 0x00ffff){
+					position.push( new THREE.Vector3( -p.position.x, 0, 0 ) );
+					position.push( new THREE.Vector3( -p.position.x, 10, 0 ) );
+				}
+				material = new THREE.LineBasicMaterial( { color: setColor} );
+				geometry = new THREE.BufferGeometry().setFromPoints( position );
+				line = new THREE.Line( geometry, material );
+				line.name = name;
+				rightLineGroup.add(line);
+			}
+		}
+
+		function keydown (e){
+			//Prevent the user to scroll in the page if the pen is in an iFrame
+			e.preventDefault();
+			
+			switch( e.which ){
+				case 49: 
+					CreateLine("up", 0xff0000, hPosition)
+					choiceLine = 'h'
+					break;   // 1
+				case 50: 
+					CreateLine("right", 0x00ff00, vPosition)
+					choiceLine = 'v'
+					break;   // 2
+				case 51: 
+					CreateLine("down", 0xff0000, hPosition)
+					choiceLine = 'h'
+					break;   // 3
+				case 52: 
+					CreateLine("left", 0x00ff00, vPosition)
+					choiceLine = 'v'
+					break;   // 4
+				case 81: 
+					rightLineGroup.clear()
+					CopyLine("down", 0xff00ff)
+					CopyLine("up", 0xff00ff)
+					CopyLine("left", 0x00ffff)
+					CopyLine("right", 0x00ffff)
+					break;   // q
+				case 83: 
+					SavePoint()
+					break;   // s
+			}
+			
+			document.addEventListener( 'pointerdown', onPointerDown );
+		}
+
+		function SavePoint(){
+			var dataJSON = { modelList }; 
+			var dataJson = JSON.stringify(dataJSON); // // I try  JSON.stringify(scene) but it is wrong solution too
+			downloadTextFile(dataJson,"eyePosition.json")
+		}
+
+		function downloadTextFile(text, name) {
+			const a = document.createElement('a');
+			const type = name.split(".").pop();
+			a.href = URL.createObjectURL( new Blob([text], { type:`text/${type === "txt" ? "plain" : type}` }) );
+			a.download = name;
+			a.click();
+		}
+
+		function onPointerMove( event ) {
+
+			if ( event.isPrimary === false) return;
+
+			mouse.x = (( event.clientX / window.innerWidth ) * 2 - 1) * window.innerWidth / 30 / 2 / camera.zoom + camera.position.x;
+			mouse.y = (-( event.clientY / window.innerHeight ) * 2 + 1) * window.innerHeight / 30 / 2 / camera.zoom + camera.position.y;
+			
+		}
+
+		function onPointerDown( event ) {
+
+			if ( event.isPrimary === false ) return;
+			if(event.button == 0){
+				choiceLine = 0
+				if(leftLineGroup.children.length == 4){
+					modelList[index]["line_locationx_1"] = leftLineGroup.getObjectByName('left').position.x
+					modelList[index]["line_locationy_1"] = leftLineGroup.getObjectByName('up').position.y
+					modelList[index]["line_locationx_2"] = leftLineGroup.getObjectByName('right').position.x
+					modelList[index]["line_locationy_2"] = leftLineGroup.getObjectByName('up').position.y
+					modelList[index]["line_locationx_3"] = leftLineGroup.getObjectByName('left').position.x
+					modelList[index]["line_locationy_3"] = leftLineGroup.getObjectByName('down').position.y
+					modelList[index]["line_locationx_4"] = leftLineGroup.getObjectByName('right').position.x
+					modelList[index]["line_locationy_4"] = leftLineGroup.getObjectByName('down').position.y
+				}
+				console.log(line.position)
+			}
+		}
+
+		function animate() {
+			
+			switch( choiceLine ){
+				case 'h': 
+					line.position.y = mouse.y
+					break;   // 水平
+				case 'v': 
+					line.position.x = mouse.x
+					break;   // 垂直
+			}
+			requestAnimationFrame(animate);
+			render();
+
+		}
+
+		function render() {
+
+			effect.render(scene, camera);
+
+		}
+	</script>
+
+</body>
+
+</html>
