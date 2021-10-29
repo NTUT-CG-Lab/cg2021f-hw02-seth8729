@@ -512,7 +512,7 @@
 
 		function SavePoint(){
 			var dataJSON = { modelList }; 
-			var dataJson = JSON.stringify(dataJSON); // // I try  JSON.stringify(scene) but it is wrong solution too
+			var dataJson = JSON.stringify(dataJSON, null, 4); // // I try  JSON.stringify(scene) but it is wrong solution too
 			downloadTextFile(dataJson,"eyePosition.json")
 		}
 
